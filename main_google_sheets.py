@@ -153,8 +153,8 @@ if __name__ == '__main__':
                 cycle_count = 0
             
             check_prices(products)
-            print("Mai verific peste o oră")
-            time.sleep(3600)  # o oră între verificări
+            print("Mai verific peste 30 secunde")
+            time.sleep(30)  # 30 secunde între verificări
             cycle_count += 1
             
         except KeyboardInterrupt:
