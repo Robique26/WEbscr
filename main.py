@@ -49,22 +49,37 @@ def send_telegram_message(message):
         print(f"Eroare la trimiterea mesajului Telegram: {e}")
 
 def check_prices():
+    print("\n=== VERIFICARE PREȚURI ===")
+    print(f"Timp verificare: {time.strftime('%Y-%m-%d %H:%M:%S')}")
+    print("-" * 50)
+    
     for product in PRODUCTS:
         price = get_price(product)
         if price is not None:
+            # Afișează prețul în terminal
+            print(f"✓ {product['name']}: {price} Lei")
+            
             if product['last_price'] is None:
                 product['last_price'] = price
+                print(f"  → Primul preț înregistrat")
             elif price < product['last_price']:
                 msg = f"Preț scăzut la {product['name']}: {product['last_price']} -> {price} Lei!\n{product['url']}"
+                print(f"  → 📉 SCĂDERE! Trimis mesaj Telegram")
                 send_telegram_message(msg)
                 product['last_price'] = price
+            elif price > product['last_price']:
+                print(f"  → 📈 Creștere: {product['last_price']} -> {price}")
+                product['last_price'] = price
             else:
+                print(f"  → 📊 Preț neschimbat")
                 product['last_price'] = price
         else:
-            print(f"Nu am putut obține prețul pentru {product['name']}")
+            print(f"✗ {product['name']}: Nu am putut obține prețul")
+    
+    print("-" * 50)
 
 if __name__ == '__main__':
     while True:
         check_prices()
-        print("Mai verific peste o ora")
-        time.sleep(3600) # verifică la fiecare oră
+        print("Mai verific peste 5 secunde")
+        time.sleep(5)  # verifică la fiecare 5 secunde
