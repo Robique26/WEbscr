@@ -48,6 +48,23 @@ def send_telegram_message(message):
     except Exception as e:
         print(f"Eroare la trimiterea mesajului Telegram: {e}")
 
+def check_telegram_commands():
+    """Verifică dacă ai trimis /test pe Telegram"""
+    try:
+        url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getUpdates"
+        resp = requests.get(url)
+        if resp.status_code == 200:
+            data = resp.json()
+            if data['result']:
+                last_message = data['result'][-1]['message']
+                if 'text' in last_message and last_message['text'] == '/test':
+                    send_telegram_message("✅ Scriptul rulează perfect! Monitorizez prețurile...")
+                    # Marchează mesajul ca citit
+                    offset = data['result'][-1]['update_id'] + 1
+                    requests.get(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getUpdates?offset={offset}")
+    except Exception as e:
+        print(f"Eroare verificare comenzi: {e}")
+
 def check_prices():
     print("\n=== VERIFICARE PREȚURI ===")
     print(f"Timp verificare: {time.strftime('%Y-%m-%d %H:%M:%S')}")
@@ -79,7 +96,12 @@ def check_prices():
     print("-" * 50)
 
 if __name__ == '__main__':
+    print("🚀 Monitor prețuri pornit!")
+    print("💬 Trimite '/test' pe Telegram pentru verificare...")
+    
     while True:
+        # Verifică comenzi Telegram înainte de monitorizare
+        check_telegram_commands()
         check_prices()
         print("Mai verific peste 5 secunde")
         time.sleep(5)  # verifică la fiecare 5 secunde
