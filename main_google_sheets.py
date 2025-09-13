@@ -75,8 +75,8 @@ def send_telegram_message(message):
     except Exception as e:
         print(f"Eroare la trimiterea mesajului Telegram: {e}")
 
-def check_telegram_commands():
-    """Verifică dacă ai trimis /test sau /reload pe Telegram"""
+def check_telegram_commands(products):
+    """Verifică dacă ai trimis /test, /reload sau /pret pe Telegram"""
     try:
         url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getUpdates"
         resp = requests.get(url)
@@ -97,6 +97,19 @@ def check_telegram_commands():
                         offset = data['result'][-1]['update_id'] + 1
                         requests.get(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getUpdates?offset={offset}")
                         return True  # Signal to reload products
+                    elif command == '/pret':
+                        # Afișează toate prețurile curente
+                        price_list = "📊 PREȚURI CURENTE:\n\n"
+                        for product in products:
+                            if product['last_price'] is not None:
+                                price_list += f"• {product['name']}: {product['last_price']} Lei\n"
+                            else:
+                                price_list += f"• {product['name']}: Preț indisponibil\n"
+                        
+                        send_telegram_message(price_list)
+                        # Marchează mesajul ca citit
+                        offset = data['result'][-1]['update_id'] + 1
+                        requests.get(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getUpdates?offset={offset}")
     except Exception as e:
         print(f"Eroare verificare comenzi: {e}")
     return False
@@ -136,6 +149,7 @@ if __name__ == '__main__':
     print("💬 Comenzi Telegram:")
     print("   /test - verifică dacă scriptul rulează")
     print("   /reload - reîncarcă produsele din Google Sheets")
+    print("   /pret - afișează toate prețurile curente")
     
     # Încarcă produsele inițial
     products = load_products_from_google_sheets()
@@ -144,7 +158,7 @@ if __name__ == '__main__':
     while True:
         try:
             # Verifică comenzi Telegram
-            should_reload = check_telegram_commands()
+            should_reload = check_telegram_commands(products)
             
             # Reîncarcă produsele la fiecare 10 cicluri sau la comandă
             if should_reload or cycle_count % 10 == 0:
