@@ -2,25 +2,20 @@ import requests
 from bs4 import BeautifulSoup
 import time
 import pandas as pd
-import io
+import json
+import re
 
 # Setări Telegram
 TELEGRAM_TOKEN = '8229151011:AAF_TzWPm03IVnZ9cyXFe1vUZeYX_Vp-LjA'
 TELEGRAM_CHAT_ID = '1531622471'
 
-# LINK-UL TĂU GOOGLE SHEETS - CONFIGURAT CORECT! ✅
-# Original: https://docs.google.com/spreadsheets/d/1dmpIwSgstN5S5qcCUbkWcFOablKWSk3J574iGZ5TcEI/edit?usp=sharing
-# Export:   https://docs.google.com/spreadsheets/d/1dmpIwSgstN5S5qcCUbkWcFOablKWSk3J574iGZ5TcEI/export?format=csv
-GOOGLE_SHEETS_URL = "https://docs.google.com/spreadsheets/d/1dmpIwSgstN5S5qcCUbkWcFOablKWSk3J574iGZ5TcEI/export?format=csv"
+# Fișierul Excel local
+EXCEL_FILE = "produse.xlsx"
 
-def load_products_from_google_sheets():
-    """Încarcă produsele din Google Sheets în timp real"""
+def load_products_from_excel():
+    """Încarcă produsele din fișierul Excel local"""
     try:
-        response = requests.get(GOOGLE_SHEETS_URL)
-        response.raise_for_status()
-        
-        # Citește CSV-ul din Google Sheets
-        df = pd.read_csv(io.StringIO(response.text))
+        df = pd.read_excel(EXCEL_FILE)
         
         products = []
         for _, row in df.iterrows():
@@ -31,36 +26,93 @@ def load_products_from_google_sheets():
                 'last_price': None
             })
         
-        print(f"✅ Încărcat {len(products)} produse din Google Sheets")
+        print(f"✅ Încărcat {len(products)} produse din Excel")
         return products
         
     except Exception as e:
-        print(f"❌ Eroare la încărcarea din Google Sheets: {e}")
-        # Fallback la Excel local
-        print("🔄 Încerc să citesc din produse.xlsx local...")
-        df = pd.read_excel('produse.xlsx')
-        products = []
-        for _, row in df.iterrows():
-            products.append({
-                'name': row['nume'],
-                'url': row['url'],
-                'selector': row['selector'],
-                'last_price': None
-            })
-        return products
+        print(f"❌ Eroare la încărcarea din Excel: {e}")
+        return []
 
 def get_price(product):
     try:
-        resp = requests.get(product['url'], headers={'User-Agent': 'Mozilla/5.0'})
+        # Headers mai bune pentru anti-blocking (fără compression pentru simplitate)
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+            'Accept-Language': 'ro-RO,ro;q=0.9,en;q=0.8',
+            'Connection': 'keep-alive',
+            'Upgrade-Insecure-Requests': '1'
+        }
+        
+        resp = requests.get(product['url'], headers=headers, timeout=10)
+        
+        # Verifică dacă site-ul blochează (403 Cloudflare)
+        if resp.status_code == 403:
+            print(f"[{product['name']}] Site blocat cu 403 (probabil Cloudflare)")
+            return None
+            
         resp.raise_for_status()
         soup = BeautifulSoup(resp.text, 'html.parser')
+        
+        # METODA 1: Încearcă mai întâi selectorul CSS pentru toate produsele
         price_tag = soup.select_one(product['selector'])
         if price_tag:
-            price_str = price_tag.text.strip().replace('Lei', '').replace('.', '').replace(',', '.')
-            return float(price_str)
+            try:
+                price_str = price_tag.text.strip().replace('Lei', '').replace('lei', '').replace('.', '').replace(',', '.').strip()
+                price = float(price_str)
+                print(f"[{product['name']}] Preț găsit cu CSS selector: {price} lei")
+                return price
+            except (ValueError, AttributeError):
+                print(f"[{product['name']}] Selectorul găsit dar eroare la procesare: '{price_tag.text.strip()}'")
         else:
-            print(f"[{product['name']}] Selectorul nu a găsit prețul!")
-            return None
+            print(f"[{product['name']}] Selectorul CSS nu a găsit elementul")
+        
+        # METODA 2: Fallback JavaScript - caută prețuri în orice script pentru toate site-urile
+        print(f"[{product['name']}] Încerc fallback JavaScript...")
+        scripts = soup.find_all('script')
+        
+        for script in scripts:
+            if not script.string:
+                continue
+                
+            # Pentru PlayBike.ro - caută plyPageData
+            if 'plyPageData' in script.string:
+                match = re.search(r'window\[\'plyPageData\'\]\s*=\s*({.*?});', script.string, re.DOTALL)
+                if match:
+                    try:
+                        data = json.loads(match.group(1))
+                        if 'productDetails' in data and 'price' in data['productDetails']:
+                            price_cents = data['productDetails']['price']
+                            price = price_cents / 100
+                            print(f"[{product['name']}] Preț găsit în plyPageData: {price} lei")
+                            return price
+                    except json.JSONDecodeError:
+                        continue
+            
+            # Pentru alte site-uri - caută pattern-uri generale de preț în JSON
+            price_patterns = [
+                r'"price":\s*(\d+(?:\.\d+)?)',  # "price": 123.45
+                r'"currentPrice":\s*(\d+(?:\.\d+)?)',  # "currentPrice": 123.45
+                r'"sellPrice":\s*(\d+(?:\.\d+)?)',     # "sellPrice": 123.45
+                r'"finalPrice":\s*(\d+(?:\.\d+)?)',    # "finalPrice": 123.45
+                r'price["\']:\s*["\']?(\d+(?:\.\d+)?)', # price: "123.45" sau price: 123.45
+            ]
+            
+            for pattern in price_patterns:
+                matches = re.finditer(pattern, script.string, re.IGNORECASE)
+                for match in matches:
+                    try:
+                        price = float(match.group(1))
+                        # Verifică dacă prețul pare rezonabil (între 1 și 50000 lei)
+                        if 1 <= price <= 50000:
+                            print(f"[{product['name']}] Preț găsit în JavaScript: {price} lei")
+                            return price
+                    except ValueError:
+                        continue
+        
+        print(f"[{product['name']}] Nu am găsit prețul nici cu CSS nici cu JavaScript")
+        return None
+            
     except Exception as e:
         print(f"[{product['name']}] Eroare la get_price: {e}")
         return None
@@ -75,8 +127,8 @@ def send_telegram_message(message):
     except Exception as e:
         print(f"Eroare la trimiterea mesajului Telegram: {e}")
 
-def check_telegram_commands():
-    """Verifică dacă ai trimis /test sau /reload pe Telegram"""
+def check_telegram_commands(products):
+    """Verifică dacă ai trimis /test, /reload sau /pret pe Telegram"""
     try:
         url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getUpdates"
         resp = requests.get(url)
@@ -87,16 +139,29 @@ def check_telegram_commands():
                 if 'text' in last_message:
                     command = last_message['text']
                     if command == '/test':
-                        send_telegram_message("✅ Scriptul rulează perfect! Monitorizez prețurile...")
+                        send_telegram_message("✅ Scriptul rulează perfect cu Excel! Monitorizez prețurile...")
                         # Marchează mesajul ca citit
                         offset = data['result'][-1]['update_id'] + 1
                         requests.get(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getUpdates?offset={offset}")
                     elif command == '/reload':
-                        send_telegram_message("🔄 Reîncărcare produse din Google Sheets...")
+                        send_telegram_message("🔄 Reîncărcare produse din fișierul Excel...")
                         # Marchează mesajul ca citit
                         offset = data['result'][-1]['update_id'] + 1
                         requests.get(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getUpdates?offset={offset}")
                         return True  # Signal to reload products
+                    elif command == '/pret':
+                        # Afișează toate prețurile curente
+                        price_list = "📊 PREȚURI CURENTE (din Excel):\n\n"
+                        for product in products:
+                            if product['last_price'] is not None:
+                                price_list += f"• {product['name']}: {product['last_price']} Lei\n"
+                            else:
+                                price_list += f"• {product['name']}: Preț indisponibil\n"
+                        
+                        send_telegram_message(price_list)
+                        # Marchează mesajul ca citit
+                        offset = data['result'][-1]['update_id'] + 1
+                        requests.get(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getUpdates?offset={offset}")
     except Exception as e:
         print(f"Eroare verificare comenzi: {e}")
     return False
@@ -132,29 +197,30 @@ def check_prices(products):
     print("-" * 50)
 
 if __name__ == '__main__':
-    print("🚀 Monitor prețuri pornit cu Google Sheets!")
+    print("🚀 Monitor prețuri pornit cu Excel!")
     print("💬 Comenzi Telegram:")
     print("   /test - verifică dacă scriptul rulează")
-    print("   /reload - reîncarcă produsele din Google Sheets")
+    print("   /reload - reîncarcă produsele din Excel")
+    print("   /pret - afișează toate prețurile curente")
     
     # Încarcă produsele inițial
-    products = load_products_from_google_sheets()
+    products = load_products_from_excel()
     
     cycle_count = 0
     while True:
         try:
             # Verifică comenzi Telegram
-            should_reload = check_telegram_commands()
+            should_reload = check_telegram_commands(products)
             
             # Reîncarcă produsele la fiecare 10 cicluri sau la comandă
             if should_reload or cycle_count % 10 == 0:
-                print("🔄 Reîncărcare produse din Google Sheets...")
-                products = load_products_from_google_sheets()
+                print("🔄 Reîncărcare produse din Excel...")
+                products = load_products_from_excel()
                 cycle_count = 0
             
             check_prices(products)
-            print("Mai verific peste o oră")
-            time.sleep(3600)  # o oră între verificări
+            print("Mai verific peste 30 secunde")
+            time.sleep(30)  # 30 secunde între verificări
             cycle_count += 1
             
         except KeyboardInterrupt:

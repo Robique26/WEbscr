@@ -3,6 +3,8 @@ from bs4 import BeautifulSoup
 import time
 import pandas as pd
 import io
+import json
+import re
 
 # Setări Telegram
 TELEGRAM_TOKEN = '8229151011:AAF_TzWPm03IVnZ9cyXFe1vUZeYX_Vp-LjA'
@@ -51,16 +53,84 @@ def load_products_from_google_sheets():
 
 def get_price(product):
     try:
-        resp = requests.get(product['url'], headers={'User-Agent': 'Mozilla/5.0'})
+        # Headers mai bune pentru anti-blocking (fără compression pentru simplitate)
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+            'Accept-Language': 'ro-RO,ro;q=0.9,en;q=0.8',
+            'Connection': 'keep-alive',
+            'Upgrade-Insecure-Requests': '1'
+        }
+        
+        resp = requests.get(product['url'], headers=headers, timeout=10)
+        
+        # Verifică dacă site-ul blochează (403 Cloudflare)
+        if resp.status_code == 403:
+            print(f"[{product['name']}] Site blocat cu 403 (probabil Cloudflare)")
+            return None
+            
         resp.raise_for_status()
         soup = BeautifulSoup(resp.text, 'html.parser')
+        
+        # METODA 1: Încearcă mai întâi selectorul CSS pentru toate produsele
         price_tag = soup.select_one(product['selector'])
         if price_tag:
-            price_str = price_tag.text.strip().replace('Lei', '').replace('.', '').replace(',', '.')
-            return float(price_str)
-        else:
-            print(f"[{product['name']}] Selectorul nu a găsit prețul!")
-            return None
+            try:
+                price_str = price_tag.text.strip().replace('Lei', '').replace('lei', '').replace('.', '').replace(',', '.').strip()
+                price = float(price_str)
+                #print(f"[{product['name']}] Preț găsit cu CSS selector: {price} lei")
+                return price
+            except (ValueError, AttributeError):
+                print(f"[{product['name']}] Selectorul găsit dar eroare la procesare: '{price_tag.text.strip()}'")
+        #else:
+            #print(f"[{product['name']}] Selectorul CSS nu a găsit elementul")
+        
+        # METODA 2: Fallback JavaScript - caută prețuri în orice script pentru toate site-urile
+        #print(f"[{product['name']}] Încerc fallback JavaScript...")
+        scripts = soup.find_all('script')
+        
+        for script in scripts:
+            if not script.string:
+                continue
+                
+            # Pentru PlayBike.ro - caută plyPageData
+            if 'plyPageData' in script.string:
+                match = re.search(r'window\[\'plyPageData\'\]\s*=\s*({.*?});', script.string, re.DOTALL)
+                if match:
+                    try:
+                        data = json.loads(match.group(1))
+                        if 'productDetails' in data and 'price' in data['productDetails']:
+                            price_cents = data['productDetails']['price']
+                            price = price_cents / 100
+                            #print(f"[{product['name']}] Preț găsit în plyPageData: {price} lei")
+                            return price
+                    except json.JSONDecodeError:
+                        continue
+            
+            # Pentru alte site-uri - caută pattern-uri generale de preț în JSON
+            price_patterns = [
+                r'"price":\s*(\d+(?:\.\d+)?)',  # "price": 123.45
+                r'"currentPrice":\s*(\d+(?:\.\d+)?)',  # "currentPrice": 123.45
+                r'"sellPrice":\s*(\d+(?:\.\d+)?)',     # "sellPrice": 123.45
+                r'"finalPrice":\s*(\d+(?:\.\d+)?)',    # "finalPrice": 123.45
+                r'price["\']:\s*["\']?(\d+(?:\.\d+)?)', # price: "123.45" sau price: 123.45
+            ]
+            
+            for pattern in price_patterns:
+                matches = re.finditer(pattern, script.string, re.IGNORECASE)
+                for match in matches:
+                    try:
+                        price = float(match.group(1))
+                        # Verifică dacă prețul pare rezonabil (între 1 și 50000 lei)
+                        if 1 <= price <= 50000:
+                            #print(f"[{product['name']}] Preț găsit în JavaScript: {price} lei")
+                            return price
+                    except ValueError:
+                        continue
+        
+        print(f"[{product['name']}] Nu am găsit prețul nici cu CSS nici cu JavaScript")
+        return None
+            
     except Exception as e:
         print(f"[{product['name']}] Eroare la get_price: {e}")
         return None
