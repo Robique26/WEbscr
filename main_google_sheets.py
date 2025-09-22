@@ -184,13 +184,23 @@ def check_telegram_commands(products):
                         requests.get(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getUpdates?offset={offset}")
                         return products  # Returnează lista reîncărcată
                     elif command == '/pret':
-                        # Testează primul produs să vadă dacă merge
+                        # Afișează toate prețurile curente
                         if products:
-                            test_price = get_price(products[0])
-                            if test_price:
-                                send_telegram_message(f"🔍 Test: {products[0]['name']} = {test_price} lei")
+                            price_list = []
+                            for product in products:
+                                current_price = get_price(product)
+                                if current_price:
+                                    price_list.append(f"• {product['name']}: {current_price} Lei")
+                                else:
+                                    price_list.append(f"• {product['name']}: ❌ Indisponibil")
+                            
+                            if price_list:
+                                message = "💰 **PREȚURI CURENTE:**\n\n" + "\n".join(price_list)
+                                send_telegram_message(message)
                             else:
-                                send_telegram_message(f"❌ Test: Nu pot găsi prețul pentru {products[0]['name']}")
+                                send_telegram_message("❌ Nu am putut obține niciun preț")
+                        else:
+                            send_telegram_message("❌ Nu am produse încărcate")
                         # Marchează mesajul ca citit
                         offset = data['result'][-1]['update_id'] + 1
                         requests.get(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getUpdates?offset={offset}")
