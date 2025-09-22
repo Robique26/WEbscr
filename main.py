@@ -54,21 +54,31 @@ def get_price(product):
         resp.raise_for_status()
         soup = BeautifulSoup(resp.text, 'html.parser')
         
-        # METODA 1: Încearcă mai întâi selectorul CSS pentru toate produsele
+        # Detectează site-uri internaționale care au probleme cu CSS
+        # Pentru site-uri românești (.ro), dă prioritate CSS chiar dacă conține RON/EUR
+        is_romanian_site = '.ro/' in product['url'] or product['url'].endswith('.ro')
+        
+        # Site internațional = orice site non-românesc (.de, .com, .fr, .it, .es, etc.)
+        is_international_site = not is_romanian_site
+        
+        # METODA 1: Încearcă selectorul CSS
+        css_price = None
         price_tag = soup.select_one(product['selector'])
         if price_tag:
             try:
                 price_str = price_tag.text.strip().replace('Lei', '').replace('lei', '').replace('.', '').replace(',', '.').strip()
-                price = float(price_str)
-                print(f"[{product['name']}] Preț găsit cu CSS selector: {price} lei")
-                return price
+                css_price = float(price_str)
+                print(f"[{product['name']}] CSS găsește: {css_price} (din '{price_tag.text.strip()}')")
+                
+                # Pentru site-uri românești, returnează imediat CSS
+                if not is_international_site:
+                    return css_price
+                    
             except (ValueError, AttributeError):
                 print(f"[{product['name']}] Selectorul găsit dar eroare la procesare: '{price_tag.text.strip()}'")
-        else:
-            print(f"[{product['name']}] Selectorul CSS nu a găsit elementul")
         
-        # METODA 2: Fallback JavaScript - caută prețuri în orice script pentru toate site-urile
-        print(f"[{product['name']}] Încerc fallback JavaScript...")
+        # METODA 2: JavaScript - pentru site-uri internaționale sau ca fallback
+        #print(f"[{product['name']}] Încerc fallback JavaScript...")
         scripts = soup.find_all('script')
         
         for script in scripts:
@@ -84,7 +94,7 @@ def get_price(product):
                         if 'productDetails' in data and 'price' in data['productDetails']:
                             price_cents = data['productDetails']['price']
                             price = price_cents / 100
-                            print(f"[{product['name']}] Preț găsit în plyPageData: {price} lei")
+                            #print(f"[{product['name']}] Preț găsit în plyPageData: {price} lei")
                             return price
                     except json.JSONDecodeError:
                         continue
@@ -105,11 +115,16 @@ def get_price(product):
                         price = float(match.group(1))
                         # Verifică dacă prețul pare rezonabil (între 1 și 50000 lei)
                         if 1 <= price <= 50000:
-                            print(f"[{product['name']}] Preț găsit în JavaScript: {price} lei")
+                            print(f"[{product['name']}] JavaScript găsește: {price} lei")
                             return price
                     except ValueError:
                         continue
         
+        # Dacă JavaScript nu găsește nimic dar CSS a găsit ceva, returnează CSS
+        if css_price is not None:
+            print(f"[{product['name']}] Folosesc fallback CSS: {css_price} lei")
+            return css_price
+            
         print(f"[{product['name']}] Nu am găsit prețul nici cu CSS nici cu JavaScript")
         return None
             
