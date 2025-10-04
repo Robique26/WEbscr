@@ -262,4 +262,47 @@ def main():
             time.sleep(300)
 
 if __name__ == "__main__":
-    main()
+    # În mod normal apelăm main(). Totuși, când rulăm pe VPS cu nohup,
+    # vrem să prindem orice excepție neprevăzută, să o logăm și să încercăm
+    # să repornim scriptul de câteva ori înainte de a renunța.
+    import traceback
+
+    MAX_RESTARTS = 3
+    restart_count = 0
+
+    while True:
+        try:
+            main()
+            break  # Dacă main() iese normal, nu mai restartăm
+        except KeyboardInterrupt:
+            print('\n👋 Oprire manuală primită (KeyboardInterrupt). Ieșire.')
+            try:
+                send_telegram_message(f"👋 Scriptul a fost oprit manual pe server la {time.strftime('%Y-%m-%d %H:%M:%S')}")
+            except Exception:
+                print('⚠️ Nu am putut trimite mesaj Telegram despre oprirea manuală')
+            break
+        except Exception as e:
+            # Scrie traceback complet în crash.log pentru debugging pe VPS
+            tb = traceback.format_exc()
+            timestamp = time.strftime('%Y-%m-%d %H:%M:%S')
+            with open('crash.log', 'a', encoding='utf-8') as f:
+                f.write(f"[{timestamp}] EXCEPȚIE NEAȘTEPTATĂ:\n")
+                f.write(tb + '\n')
+            print(f"❌ EXCEPȚIE NEAȘTEPTATĂ: {e}. Vezi crash.log pentru detalii.")
+            # Trimite notificare pe Telegram (rezumat, fără traceback complet)
+            try:
+                send_telegram_message(f"❌ Scriptul s-a oprit neașteptat: {str(e)[:200]}\nVezi crash.log pentru detalii.")
+            except Exception:
+                print('⚠️ Nu am putut trimite mesaj Telegram despre eroare')
+            restart_count += 1
+            if restart_count > MAX_RESTARTS:
+                print(f"⚠️ Am încercat să restartez de {MAX_RESTARTS} ori. Oprire definitivă.")
+                try:
+                    send_telegram_message(f"⚠️ Scriptul s-a oprit definitiv după {MAX_RESTARTS} încercări de restart. Verifică crash.log.")
+                except Exception:
+                    print('⚠️ Nu am putut trimite mesaj Telegram despre oprirea definitivă')
+                break
+            else:
+                wait = min(60 * restart_count, 300)  # backoff: 60s, 120s, 180s...
+                print(f"🔁 Voi reîncerca în {wait} secunde (restart #{restart_count})...")
+                time.sleep(wait)
