@@ -1,0 +1,7 @@
+curl_cffi>=0.7
+selectolax>=1.0
+python-telegram-bot[job-queue]>=21
+python-dotenv>=1.0
+openpyxl>=3.1
+# opțional, doar pentru USE_BROWSER_FALLBACK=1:
+# playwright>=1.45
